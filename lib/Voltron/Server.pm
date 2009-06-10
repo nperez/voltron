@@ -110,6 +110,7 @@ class Voltron::Server extends POEx::ProxySession::Server
                     min_participant_version => $payload->{min_participant_version},
                     requires                => $payload->{requires},
                     provides                => $payload->{provides},
+                    participants            => []
                 }
             );
 
@@ -164,22 +165,61 @@ class Voltron::Server extends POEx::ProxySession::Server
             }
             else
             {
-                $self->set_participant
-                (
-                    $participant_name,
-                    {
-                        application     => $application_name,
-                        session_name    => $part_session_name,
-                        version         => $parver,
-                        provides        => $payload->{provides},
-                        requires        => $payload->{requires},
-                    },
-                );
+                my $participant = 
+                {
+                    application     => $application_name,
+                    session_name    => $part_session_name,
+                    version         => $parver,
+                    provides        => $payload->{provides},
+                    requires        => $payload->{requires},
+                };
+
+                $self->set_participant($participant_name, $participant);
+                $app->{participants}->{$participant_name} = $participant;
 
                 $self->yield('return_success', $data, $id, $app);
             }
         }
+    }
 
+    method unregister_application(ProxyMessage $data, WheelID $id) is Event
+    {
+        state $validator = MooseX::Meta::TypeConstraint::ForceCoercion->new(type_constraint => UnRegisterApplicationPayload);
+
+        my $payload = thaw($data->{payload});
+        
+        if( defined ( my $msg = $validator->validate( $payload ) ) )
+        {
+            $self->yield('return_error', $data, $id, "Payload is invalid: $msg");
+        }
+        
+        if(!$self->has_application($application_name))
+        {
+            $self->yield('return_error', $data, $id, "Application '$application_name' doesn't exist");    
+        }
+        else
+        {
+            foreach my $participant ( values %{ $self->get_application($application_name)->{participants} } )
+            {
+                $self->yield('send_app_termination', $participant);
+            }
+
+            $self->delete_application($application_name);
+
+            $self->yield('return_success', $data, $id);
+        }
+    }
+
+    method unregister_participant(ProxyMessage $data, WheelID $id) is Event
+    {
+        state $validator = MooseX::Meta::TypeConstraint::ForceCoercion->new(type_constraint => UnRegisterParticipantPayload);
+
+        my $payload = thaw($data->{payload});
+        
+        if( defined ( my $msg = $validator->validate( $payload ) ) )
+        {
+            $self->yield('return_error', $data, $id, "Payload is invalid: $msg");
+        }
     }
 }
 
