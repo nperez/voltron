@@ -82,6 +82,7 @@ class Voltron::Server extends POEx::ProxySession::Server
         if( defined ( my $msg = $validator->validate( $payload ) ) )
         {
             $self->yield('return_error', $data, $id, "Payload is invalid: $msg");
+            return;
         }
 
         my $application_name = $payload->{application_name};
@@ -127,6 +128,7 @@ class Voltron::Server extends POEx::ProxySession::Server
         if( defined ( my $msg = $validator->validate( $payload ) ) )
         {
             $self->yield('return_error', $data, $id, "Payload is invalid: $msg");
+            return;
         }
         
         my $participant_name = $payload->{participant_name};
@@ -177,6 +179,8 @@ class Voltron::Server extends POEx::ProxySession::Server
                 $self->set_participant($participant_name, $participant);
                 $app->{participants}->{$participant_name} = $participant;
 
+                $self->yield('send_app_participant_add', $app, $participant);
+
                 $self->yield('return_success', $data, $id, $app);
             }
         }
@@ -191,23 +195,23 @@ class Voltron::Server extends POEx::ProxySession::Server
         if( defined ( my $msg = $validator->validate( $payload ) ) )
         {
             $self->yield('return_error', $data, $id, "Payload is invalid: $msg");
+            return;
         }
         
         if(!$self->has_application($application_name))
         {
-            $self->yield('return_error', $data, $id, "Application '$application_name' doesn't exist");    
+            $self->yield('return_error', $data, $id, "Application '$application_name' doesn't exist");
+            return;
         }
-        else
+        
+        foreach my $participant ( values %{ $self->get_application($application_name)->{participants} } )
         {
-            foreach my $participant ( values %{ $self->get_application($application_name)->{participants} } )
-            {
-                $self->yield('send_app_termination', $participant);
-            }
-
-            $self->delete_application($application_name);
-
-            $self->yield('return_success', $data, $id);
+            $self->yield('send_participant_termination', $participant);
         }
+
+        $self->delete_application($application_name);
+
+        $self->yield('return_success', $data, $id);
     }
 
     method unregister_participant(ProxyMessage $data, WheelID $id) is Event
@@ -219,8 +223,35 @@ class Voltron::Server extends POEx::ProxySession::Server
         if( defined ( my $msg = $validator->validate( $payload ) ) )
         {
             $self->yield('return_error', $data, $id, "Payload is invalid: $msg");
+            return;
         }
-    }
-}
+        
+        my $part_name = $payload->{participant_name};
+        if(!$self->has_participant($part_name))
+        {
+            $self->yield('return_error', $data, $id, "Participant '$part_name' doesn't exist");
+            return;
+        }
 
+        my $part = $self->delete_participant($part_name);
+        my $app = $self->get_application($part->{application});
+        delete($app->{participants}->{$part_name});
+
+        $self->yield('send_app_participant_remove', $app, $part);
+        $self->yield('return_success', $data, $id);
+    }
+
+    method send_app_participant_add(Application $app, Participant $part) is Event
+    {
+        my $wheel_id = $self->get_session($app->{session_name})->{wheel};
+        $self->
+    }
+
+    method send_app_participant_remove(Application $app, Participant $part) is Event
+    {
+    }
+
+    method send_participant_termination(Participant $part) is Event
+    {
+    }
 1;
