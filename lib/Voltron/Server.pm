@@ -11,6 +11,7 @@ class Voltron::Server extends POEx::ProxySession::Server
     use Voltron::Types(':all');
     use Storable('thaw', 'nfreeze');
     use aliased 'POEx::Role::Event';
+    use aliased 'POEx::Role::ProxyEvent';
 
     has applications => 
     (
@@ -46,7 +47,7 @@ class Voltron::Server extends POEx::ProxySession::Server
         }
     );
 
-    around handle_inbound_data(ProxyMessage $data, WheelID $id) is Event
+    around handle_inbound_data(VoltronMessage $data, WheelID $id) is Event
     {
         given($data->{type})
         {
@@ -73,7 +74,7 @@ class Voltron::Server extends POEx::ProxySession::Server
         }
     }
 
-    method register_application(ProxyMessage $data, WheelID $id) is Event
+    method register_application(VoltronMessage $data, WheelID $id) is Event
     {
         state $validator = MooseX::Meta::TypeConstraint::ForceCoercion->new(type_constraint => RegisterApplicationPayload);
 
@@ -81,7 +82,14 @@ class Voltron::Server extends POEx::ProxySession::Server
         
         if( defined ( my $msg = $validator->validate( $payload ) ) )
         {
-            $self->yield('return_error', $data, $id, "Payload is invalid: $msg");
+            $self->yield
+            (
+                'send_result', 
+                success     => 0,
+                original    => $data, 
+                wheel_id    => $id, 
+                payload     => \"Payload is invalid: $msg"
+            );
             return;
         }
 
@@ -90,15 +98,36 @@ class Voltron::Server extends POEx::ProxySession::Server
 
         if($self->has_application($application_name))
         {
-            $self->yield('return_error', $data, $id, "Application '$application_name' already exists");
+            $self->yield
+            (
+                'send_result', 
+                success     => 0,
+                original    => $data, 
+                wheel_id    => $id, 
+                payload     => \"Application '$application_name' already exists"
+            );
         }
         elsif(!$self->has_session($session_name))
         {
-            $self->yield('return_error', $data, $id, "Associated session '$session_name' does not exist");
+            $self->yield
+            (
+                'send_result', 
+                success     => 0,
+                original    => $data, 
+                wheel_id    => $id, 
+                payload     => \"Associated session '$session_name' does not exist"
+            );
         }
         elsif(!$self->check_provides($session_name, $payload->{provides}))
         {
-            $self->yield('return_error', $data, $id, 'Provides does not exactly match published session events');
+            $self->yield
+            (
+                'send_result', 
+                success     => 0,
+                original    => $data, 
+                wheel_id    => $id, 
+                payload     => \'Provides does not exactly match published session events'
+            );
         }
         else
         {
@@ -115,11 +144,17 @@ class Voltron::Server extends POEx::ProxySession::Server
                 }
             );
 
-            $self->yield('return_success', $data, $id);
+            $self->yield
+            (
+                'send_result', 
+                success     => 1,
+                original    => $data, 
+                wheel_id    => $id
+            );
         }
     }
 
-    method register_participant(ProxyMessage $data, WheelID $id) is Event
+    method register_participant(VoltronMessage $data, WheelID $id) is Event
     {
         state $validator = MooseX::Meta::TypeConstraint::ForceCoercion->new(type_constraint => RegisterParticipantPayload);
 
@@ -127,7 +162,14 @@ class Voltron::Server extends POEx::ProxySession::Server
         
         if( defined ( my $msg = $validator->validate( $payload ) ) )
         {
-            $self->yield('return_error', $data, $id, "Payload is invalid: $msg");
+            $self->yield
+            (
+                'send_result', 
+                success     => 0,
+                original    => $data, 
+                wheel_id    => $id, 
+                payload     => \"Payload is invalid: $msg"
+            );
             return;
         }
         
@@ -137,15 +179,36 @@ class Voltron::Server extends POEx::ProxySession::Server
 
         if(!$self->has_application($application_name))
         {
-            $self->yield('return_error', $data, $id, "Application '$application_name' doesn't exist");    
+            $self->yield
+            (
+                'send_result', 
+                success     => 0,
+                original    => $data, 
+                wheel_id    => $id, 
+                payload     => \"Application '$application_name' doesn't exist"
+            );
         }
         elsif($self->has_participant($participant_name))
         {
-            $self->yield('return_error', $data, $id, "Participant '$participant_name' already exists");
+            $self->yield
+            (
+                'send_result', 
+                success     => 0,
+                original    => $data, 
+                wheel_id    => $id, 
+                payload     => \"Participant '$participant_name' already exists"
+            );
         }
         elsif(!$self->has_session($part_session_name))
         {
-            $self->yield('return_error', $data, $id, "Participant has not published a session named '$part_session_name");
+            $self->yield
+            (
+                'send_result', 
+                success     => 0,
+                original    => $data, 
+                wheel_id    => $id, 
+                payload     => \"Participant has not published a session named '$part_session_name'"
+            );
         }
         else
         {
@@ -155,15 +218,36 @@ class Voltron::Server extends POEx::ProxySession::Server
             
             if(!$appver <= $parver)
             {
-                $self->yield('return_error', $data, $id, "Participant version '$parver' is too low for application min '$appver");
+                $self->yield
+                (
+                    'send_result', 
+                    success     => 0,
+                    original    => $data, 
+                    wheel_id    => $id, 
+                    payload     => \"Participant version '$parver' is too low for application min '$appver'"
+                );
             }
             if(!$self->check_provides($part_session_name, $app->{requires}))
             {
-                $self->yield('return_error', $data, $id, 'Participant provides do not matach what the application requires');
+                $self->yield
+                (
+                    'send_result', 
+                    success     => 0,
+                    original    => $data, 
+                    wheel_id    => $id, 
+                    payload     => \"Participant provides do not matach what the application requires"
+                );
             }
             elsif(!$self->check_provides($app->{session_name}, $payload->{requires}))
             {
-                $self->yield('return_error', $data, $id, 'Application provides do not match what the participant requires');
+                $self->yield
+                (
+                    'send_result', 
+                    success     => 0,
+                    original    => $data, 
+                    wheel_id    => $id, 
+                    payload     => \"Application provides do not match what the participant requires"
+                );
             }
             else
             {
@@ -181,12 +265,19 @@ class Voltron::Server extends POEx::ProxySession::Server
 
                 $self->yield('send_app_participant_add', $app, $participant);
 
-                $self->yield('return_success', $data, $id, $app);
+                $self->yield
+                (
+                    'send_result', 
+                    success     => 1, 
+                    original    => $data, 
+                    wheel_id    => $id, 
+                    payload     => $app
+                );
             }
         }
     }
 
-    method unregister_application(ProxyMessage $data, WheelID $id) is Event
+    method unregister_application(VoltronMessage $data, WheelID $id) is Event
     {
         state $validator = MooseX::Meta::TypeConstraint::ForceCoercion->new(type_constraint => UnRegisterApplicationPayload);
 
@@ -194,13 +285,29 @@ class Voltron::Server extends POEx::ProxySession::Server
         
         if( defined ( my $msg = $validator->validate( $payload ) ) )
         {
-            $self->yield('return_error', $data, $id, "Payload is invalid: $msg");
+            $self->yield
+            (
+                'send_result', 
+                success     => 0,
+                original    => $data, 
+                wheel_id    => $id, 
+                payload     => \"Payload is invalid: $msg"
+            );
             return;
         }
         
+        my $application_name = $$payload;
+
         if(!$self->has_application($application_name))
         {
-            $self->yield('return_error', $data, $id, "Application '$application_name' doesn't exist");
+            $self->yield
+            (
+                'send_result', 
+                success     => 0,
+                original    => $data, 
+                wheel_id    => $id, 
+                payload     => \"Application '$application_name' doesn't exist"
+            );
             return;
         }
         
@@ -211,10 +318,10 @@ class Voltron::Server extends POEx::ProxySession::Server
 
         $self->delete_application($application_name);
 
-        $self->yield('return_success', $data, $id);
+        $self->yield('send_result', $data, $id);
     }
 
-    method unregister_participant(ProxyMessage $data, WheelID $id) is Event
+    method unregister_participant(VoltronMessage $data, WheelID $id) is Event
     {
         state $validator = MooseX::Meta::TypeConstraint::ForceCoercion->new(type_constraint => UnRegisterParticipantPayload);
 
@@ -222,14 +329,29 @@ class Voltron::Server extends POEx::ProxySession::Server
         
         if( defined ( my $msg = $validator->validate( $payload ) ) )
         {
-            $self->yield('return_error', $data, $id, "Payload is invalid: $msg");
+            $self->yield
+            (
+                'send_result', 
+                success     => 0,
+                original    => $data, 
+                wheel_id    => $id, 
+                payload     => \"Payload is invalid: $msg"
+            );
+            $self->yield('send_result', $data, $id, "Payload is invalid: $msg");
             return;
         }
         
         my $part_name = $payload->{participant_name};
         if(!$self->has_participant($part_name))
         {
-            $self->yield('return_error', $data, $id, "Participant '$part_name' doesn't exist");
+            $self->yield
+            (
+                'send_result', 
+                success     => 0,
+                original    => $data, 
+                wheel_id    => $id, 
+                payload     => \"Participant '$part_name' doesn't exist"
+            );
             return;
         }
 
@@ -238,20 +360,74 @@ class Voltron::Server extends POEx::ProxySession::Server
         delete($app->{participants}->{$part_name});
 
         $self->yield('send_app_participant_remove', $app, $part);
-        $self->yield('return_success', $data, $id);
+        $self->yield
+        (
+            'send_result', 
+            success     => 1,
+            original    => $data, 
+            wheel_id    => $id
+        );
+    }
+
+    method check_provides(SessionAlias $session_name, MethodHash $requires) is Event
+    {
+        my $meta = $self->get_session($session_name)->{meta};
+        
+        while(my ($name, $obj) = each %{ $meta->{methods} })
+        {
+            if($obj->isa('Class::MOP::Method::Wrapped'))
+            {
+                my $orig = $obj->get_original_method;
+                if(!$orig->meta->isa('Moose::Meta::Class') || !$orig->meta->does_role(ProxyEvent))
+                {
+                    next;
+                }
+                
+                $obj = $orig;
+            }
+            elsif(!$obj->meta->isa('Moose::Meta::Class') || !$obj->meta->does_role(ProxyEvent))
+            {
+                next;
+            }
+
+            return 0 if not exists($requires->{$name});
+            return 0 if $obj->signature ne delete($requires->{$name});
+        }
+
+        return 0 if keys %requires;
+        return 1;
     }
 
     method send_app_participant_add(Application $app, Participant $part) is Event
     {
-        my $wheel_id = $self->get_session($app->{session_name})->{wheel};
-        $self->
+        $self->yield
+        (
+            'send_mesage',
+            type        => 'participant_add',
+            wheel_id    => $self->get_session($app->{session_name})->{wheel},
+            payload     => $part,
+        );
     }
 
     method send_app_participant_remove(Application $app, Participant $part) is Event
     {
+        $self->yield
+        (
+            'send_mesage',
+            type        => 'participant_remove',
+            wheel_id    => $self->get_session($app->{session_name})->{wheel},
+            payload     => $part,
+        );
     }
 
     method send_participant_termination(Participant $part) is Event
     {
+        $self->yield
+        (
+            'send_mesage',
+            type        => 'application_termination',
+            wheel_id    => $self->get_session($part->{session_name})->{wheel},
+            payload     => $part,
+        );
     }
 1;
