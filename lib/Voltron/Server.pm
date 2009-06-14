@@ -296,7 +296,7 @@ class Voltron::Server extends POEx::ProxySession::Server
             return;
         }
         
-        my $application_name = $$payload;
+        my $application_name = $payload->{application_name};
 
         if(!$self->has_application($application_name))
         {
@@ -394,7 +394,7 @@ class Voltron::Server extends POEx::ProxySession::Server
             return 0 if $obj->signature ne delete($requires->{$name});
         }
 
-        return 0 if keys %requires;
+        return 0 if keys %$requires;
         return 1;
     }
 
@@ -430,4 +430,6 @@ class Voltron::Server extends POEx::ProxySession::Server
             payload     => $part,
         );
     }
+}
 1;
+__END__
