@@ -44,7 +44,7 @@ role Voltron::Application with POEx::ProxySession::Client
         lazy_builder    => 1,
     );
 
-    has connections =>
+    has serverinfos =>
     (
         metaclass   => 'MooseX::AttributeHelpers::Collection::Hash',
         isa         => HashRef[ServerConnectionInfo],
@@ -52,12 +52,29 @@ role Voltron::Application with POEx::ProxySession::Client
         lazy        => 1,
         provides    => 
         {
-            exists      => 'has_connection',
-            set         => 'set_connection',
-            get         => 'get_connection',
-            delete      => 'dete_connection',
-            count       => 'count_connections',
-            values      => 'all_connections',
+            exists      => 'has_serverinfo',
+            set         => 'set_serverinfo',
+            get         => 'get_serverinfo',
+            delete      => 'delete_serverinfo',
+            count       => 'count_serverinfos',
+            values      => 'all_serverinfos',
+        }
+    );
+
+    has participants =>
+    (
+        metaclass   => 'MooseX::AttributeHelpers::Collection::Hash',
+        isa         => HashRef[Participant],
+        default     => sub { {} },
+        lazy        => 1,
+        provides    => 
+        {
+            exists      => 'has_participant',
+            set         => 'set_participant',
+            get         => 'get_participant',
+            delete      => 'delete_participant',
+            count       => 'count_participants',
+            values      => 'all_participants',
         }
     );
 
@@ -90,8 +107,22 @@ role Voltron::Application with POEx::ProxySession::Client
 
     around handle_inbound_data(VoltronMessage $data, WheelID $id) is Event
     {
+        given($data->{type})
+        {
+            when('participant_add')
+            {
+                $self->yield('add_participant', $data, $id);
+            }
+            when('participant_remove')
+            {
+                $self->yield('remote_participant', $data, $id);
+            }
+            default
+            {
+                $orig->($self, $data, $id);
+            }
+        }
     }
-
     
     method run(ArrayRef[ServerConfiguration] :$server_configs)
     {
@@ -108,6 +139,8 @@ role Voltron::Application with POEx::ProxySession::Client
                 tag             => $config
             );
         }
+
+        POE::Kernel->run();
     }
 
     after handle_on_connect(GlobRef $socket, Str $address, Int $port, WheelID $id) is Event
@@ -115,7 +148,7 @@ role Voltron::Application with POEx::ProxySession::Client
         my $tag = $self->delete_connection_tag($id);
         $tag->{connection_id} = $self->last_wheel;
         $tag->{resolved_address} = inet_ntoa($address);
-        $self->set_connection($tag->{server_alias}, $tag);
+        $self->set_serverinfo($tag->{connection_id}, $tag);
     }
 
     method publish_self(WheelID :$connection_id, Str :$remote_address, Int :$remote_port) is Event
@@ -139,22 +172,26 @@ role Voltron::Application with POEx::ProxySession::Client
         Ref :$tag?
     ) is Event
     {
+        my $info = $self->get_serverinfo($connection_id);
         if($success)
         {
-            my $connection = $self->get_connection($connection_id);
+            $self->yield('send_register_application', $info);
+        }
+        else
+        {
             $self->post
             (
-                $connection->{return_session},
-                $connection->{return_event},
-                success             => $success,
-                server_connection   => $connection,
+                $info->{return_session},
+                $info->{return_event},
+                success     => 0,
+                serverinfo  => $info,
+                payload     => $payload
             );
         }
     }
 
     method send_register_application(ServerConnectionInfo $info) is Event
     {
-        
         state $msg = 
         {
             application_name        => $self->application_name,
@@ -168,8 +205,36 @@ role Voltron::Application with POEx::ProxySession::Client
         $self->yield
         (
             'return_to_sender',
-            connection_id   => $info->{connection_id},
+            wheel_id        => $info->{connection_id},
+            return_session  => $self->ID,
+            return_event    => 'handle_on_register',
+            tag             => $info
         );
+    }
+
+    method handle_on_register(VoltronMessage $data, WheelID $id, ServerConnectionInfo $info) is Event
+    {
+        if($data->{success})
+        {
+            $self->post
+            (
+                $info->{return_session},
+                $info->{return_event},
+                success     => $success,
+                serverinfo  => $info,
+            );
+        }
+        else
+        {
+            $self->post
+            (
+                $info->{return_session},
+                $info->{return_event},
+                success     => $data->{success},
+                serverinfo  => $info,
+                payload     => thaw($data->{payload},
+            );
+        }
     }
 }
 
