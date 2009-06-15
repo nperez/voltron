@@ -12,6 +12,7 @@ use MooseX::Types -declare =>
         Participant
         VoltronMessage 
         ServerConfiguration
+        ServerConnectionInfo
         RegisterApplicationPayload
         RegisterParticipantPayload
         UnRegisterApplicationPayload
@@ -33,31 +34,32 @@ subtype MethodHash,
 subtype Application,
     as Dict
     [
-        session_name            => SessionAlias,
+        application_name        => SessionAlias,
         version                 => Num,
         min_participant_version => Num,
         requires                => Optional[MethodHash],
         provides                => MethodHash,
         participants            => ArrayRef,
+        connection_id           => Optional[WheelID],
     ];
 
 subtype Participant,
     as Dict
     [
-        application     => Str,
-        version         => Num,
-        session_name    => SessionAlias,
-        provides        => MethodHash,
-        requires        => Optional[MethodHash],
+        application_name    => SessionAlias,
+        version             => Num,
+        participant_name    => SessionAlias,
+        provides            => MethodHash,
+        requires            => Optional[MethodHash],
+        connection_id       => Optional[WheelID],
     ];
 
 subtype RegisterApplicationPayload,
     as Dict
     [
-        application_name        => Str,
+        application_name        => SessionAlias,
         version                 => Num,
         min_participant_version => Num,
-        session_name            => SessionAlias,
         provides                => MethodHash,
         requires                => Optional[MethodHash],
     ];
@@ -65,10 +67,9 @@ subtype RegisterApplicationPayload,
 subtype RegisterParticipantPayload,
     as Dict
     [
-        participant_name        => Str,
-        application_name        => Str,
+        participant_name        => SessionAlias,
+        application_name        => SessionAlias,
         version                 => Num,
-        session_name            => SessionAlias,
         provides                => MethodHash,
         requires                => Optional[MethodHash],
     ];

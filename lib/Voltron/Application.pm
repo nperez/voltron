@@ -5,7 +5,7 @@ use 5.010;
 
 use MooseX::Declare;
 
-role Voltron::Application with POEx::ProxySession::Client
+role Voltron::Application with Voltron::Guts
 {
     use Voltron::Types(':all');
     use POEx::Types(':all');
@@ -13,52 +13,13 @@ role Voltron::Application with POEx::ProxySession::Client
     use MooseX::AttributeHelpers;
     use Socket;
 
-    has application_name => 
-    (
-        is      => 'ro',
-        isa     => Str,
-    );
-    
-    has version =>
-    (
-        is      => 'ro',
-        isa     => Num,
-    );
+    use aliased 'POEx::Role::Event';
+    use aliased 'Voltron::Role::VoltronEvent';
 
     has min_participant_version =>
     (
         is      => 'ro',
         isa     => Num,
-    );
-
-    has requires =>
-    (
-        is      => 'ro',
-        isa     => MethodHash,
-    );
-    
-    has provides =>
-    (
-        is              => 'ro',
-        isa             => MethodHash,
-        lazy_builder    => 1,
-    );
-
-    has serverinfos =>
-    (
-        metaclass   => 'MooseX::AttributeHelpers::Collection::Hash',
-        isa         => HashRef[ServerConnectionInfo],
-        default     => sub { {} },
-        lazy        => 1,
-        provides    => 
-        {
-            exists      => 'has_serverinfo',
-            set         => 'set_serverinfo',
-            get         => 'get_serverinfo',
-            delete      => 'delete_serverinfo',
-            count       => 'count_serverinfos',
-            values      => 'all_serverinfos',
-        }
     );
 
     has participants =>
@@ -78,31 +39,20 @@ role Voltron::Application with POEx::ProxySession::Client
         }
     );
 
+    requires('participant_added', 'participant_removed');
 
-    method _build_provides
+    method build_register_message()
     {
-        my @methods;
-        foreach my $method ($self->meta->get_all_methods)
+        state $msg =
         {
-            if($method->isa('Class::MOP::Method::Wrapped'))
-            {
-                my $orig = $method->get_original_method;
-                if(!$orig->meta->isa('Moose::Meta::Class') || !$orig->meta->does_role(VoltronEvent))
-                {
-                    next;
-                }
-                
-                $method = $orig;
-            }
-            elsif(!$method->meta->isa('Moose::Meta::Class') || !$method->meta->does_role(VoltronEvent))
-            {
-                next;
-            }
+            application_name        => $self->name,
+            min_participant_version => $self->min_participant_version,
+            version                 => $self->version,
+            provides                => $self->provides,
+            requires                => $self->requires,
+        };
 
-            push(@methods, $method);
-        }
-
-        return { map { $_->name, $_->signature } @methods };
+        return $msg;
     }
 
     around handle_inbound_data(VoltronMessage $data, WheelID $id) is Event
@@ -111,11 +61,11 @@ role Voltron::Application with POEx::ProxySession::Client
         {
             when('participant_add')
             {
-                $self->yield('add_participant', $data, $id);
+                $self->yield('handle_add_participant', $data, $id);
             }
             when('participant_remove')
             {
-                $self->yield('remote_participant', $data, $id);
+                $self->yield('handle_remote_participant', $data, $id);
             }
             default
             {
@@ -124,117 +74,152 @@ role Voltron::Application with POEx::ProxySession::Client
         }
     }
     
-    method run(ArrayRef[ServerConfiguration] :$server_configs)
-    {
-        foreach my $config (@$server_configs)
-        {
-            $config->{return_session} ||= $self->poe->sender->ID;
-
-            $self->yield
-            (
-                'connect'
-                remote_address  => $config->{remote_address},
-                remote_port     => $config->{remote_port},
-                return_event    => 'publish_self',
-                tag             => $config
-            );
-        }
-
-        POE::Kernel->run();
-    }
-
-    after handle_on_connect(GlobRef $socket, Str $address, Int $port, WheelID $id) is Event
-    {
-        my $tag = $self->delete_connection_tag($id);
-        $tag->{connection_id} = $self->last_wheel;
-        $tag->{resolved_address} = inet_ntoa($address);
-        $self->set_serverinfo($tag->{connection_id}, $tag);
-    }
-
-    method publish_self(WheelID :$connection_id, Str :$remote_address, Int :$remote_port) is Event
-    {
-        $self->yield
-        (
-            'publish',
-            connection_id   => $connection_id,
-            session         => $self,
-            session_alias   => $self->application_name,
-            return_event    => 'check_publish_self',
-        );
-    }
-
-    method check_publish_self
+    method terminate_application
     (
-        WheelID :$connection_id, 
-        Bool :$success, 
-        SessionAlias :$session_alias, 
-        Ref :$payload?, 
-        Ref :$tag?
+        ServerConnectionInfo :$info,
+        SessionID|SessionAlias|Session|DoesSessionInstantiation :$return_session?,
+        Str :$return_event
     ) is Event
     {
-        my $info = $self->get_serverinfo($connection_id);
-        if($success)
+        state $message =
         {
-            $self->yield('send_register_application', $info);
-        }
-        else
-        {
-            $self->post
-            (
-                $info->{return_session},
-                $info->{return_event},
-                success     => 0,
-                serverinfo  => $info,
-                payload     => $payload
-            );
-        }
-    }
-
-    method send_register_application(ServerConnectionInfo $info) is Event
-    {
-        state $msg = 
-        {
-            application_name        => $self->application_name,
-            version                 => $self->version,
-            min_participant_version => $self->min_participant_version,
-            session_name            => $self->application_name,
-            provides                => $self->provides,
-            requires                => $self->requires,
+            type    => 'unregister_application',
+            id      => -1,
+            payload => nfreeze({ application_name => $self->application_name })
         };
 
         $self->yield
         (
             'return_to_sender',
+            message         => $message,
             wheel_id        => $info->{connection_id},
             return_session  => $self->ID,
-            return_event    => 'handle_on_register',
-            tag             => $info
+            return_event    => 'handle_termination',
+            tag             => 
+            { 
+                return_session => $return_session // $self->ID, 
+                return_event => $return_event 
+            }
         );
     }
 
-    method handle_on_register(VoltronMessage $data, WheelID $id, ServerConnectionInfo $info) is Event
+    method handle_termination(VoltronMessage $data, WheelID $id, Ref $tag) is Event
     {
         if($data->{success})
         {
+            my $participants = $self->all_participants;
+            foreach my $participant (@$participants)
+            {
+                if($participant->{connection_id} == $id)
+                {
+                    $self->post($participant->{participant_name}, 'shutdown');
+                    $self->delete_participant($participant->{name});
+                }
+            }
+            
             $self->post
             (
-                $info->{return_session},
-                $info->{return_event},
-                success     => $success,
-                serverinfo  => $info,
+                $tag->{return_session},
+                $tag->{return_event},
+                success     => $data->{success}
             );
         }
         else
         {
             $self->post
             (
-                $info->{return_session},
-                $info->{return_event},
+                $tag->{return_session},
+                $tag->{return_event},
                 success     => $data->{success},
-                serverinfo  => $info,
-                payload     => thaw($data->{payload},
+                payload     => thaw($data->{payload}),
             );
         }
+    }
+
+    method handle_add_participant(VoltronMessage $data, WheelID $id) is Event
+    {
+        my $participant = thaw($data->{payload});
+        $self->yield
+        (
+            'subscribe',
+            connection_id   => $id,
+            to_session      => $participant->{participant_name},
+            return_event    => 'handle_participant_subscription',
+            tag             => 
+            {
+                original        => $data,
+                participant     => $participant,
+            }
+
+        );
+    }
+
+    method handle_participant_subscription
+    (
+        WheelID :$connection_id,
+        Bool :$success, 
+        SessionAlias :$session_name, 
+        Ref :$payload, 
+        HashRef :$tag
+    ) is Event
+    {
+        if($success)
+        {
+            my $participant = $tag->{participant};
+            $participant->{connection_id} = $connection_id;
+            $self->add_participant($participant);
+            $self->yield('participant_added', participant => $participant);
+        }
+        
+        $self->yield
+        (
+            'send_result',
+            success     => $success,
+            wheel_id    => $connection_id,
+            original    => $tag->{original},
+            payload     => nfreeze($payload),
+        );
+    }
+
+    method handle_remove_participant(VoltronMessage $data, WheelID $id) is Event
+    {
+        my $participant = thaw($data->{payload});
+        $self->yield
+        (
+            'unsubscribe',
+            session_name    => $participant->{participant_name},
+            return_event    => 'handle_participant_unsubscription',
+            tag             => 
+            {
+                original        => $data,
+                participant     => $participant,
+                connection_id   => $id,
+            }
+
+        );
+    }
+
+    method handle_participant_unsubscription
+    (
+        Bool :$success, 
+        SessionAlias :$session_name, 
+        HashRef :$tag
+    ) is Event
+    {
+        if($success)
+        {
+            my $participant = $tag->{participant};
+            $self->delete_participant($participant->{name});
+            $self->yield('participant_removed', participant => $participant);
+        }
+        
+        $self->yield
+        (
+            'send_result',
+            success     => $success,
+            wheel_id    => $tag->{connection_id},
+            original    => $tag->{original},
+        );
     }
 }
 
