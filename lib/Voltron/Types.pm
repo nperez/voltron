@@ -86,6 +86,15 @@ subtype ServerConfiguration,
         remote_port         => Int,
         return_session      => Optional[SessionAlias|SessionID],
         return_event        => Str,
+        server_alias        => Str,
+        tag                 => Optional[Ref],
+    ];
+
+subtype ServerConnectionInfo,
+    as ServerConfiguration
+    [
+        connection_id       => WheelID,
+        resolved_address    => Str,
     ];
 
 subtype VoltronMessage,
