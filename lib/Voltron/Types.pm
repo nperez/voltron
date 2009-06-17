@@ -7,7 +7,6 @@ use Moose::Util::TypeConstraints;
 use MooseX::Types -declare => 
 [ 
     qw/ 
-        MethodHash
         Application
         Participant
         VoltronMessage 
@@ -24,21 +23,14 @@ use MooseX::Types::Structured('Dict', 'Optional');
 use POEx::ProxySession::Types(':all');
 use POEx::Types(':all');
 
-use aliased 'MooseX::Method::Signatures::Meta::Method';
-
-class_type Method;
-
-subtype MethodHash,
-    as HashRef[Method];
-
 subtype Application,
     as Dict
     [
         application_name        => SessionAlias,
         version                 => Num,
         min_participant_version => Num,
-        requires                => Optional[MethodHash],
-        provides                => MethodHash,
+        requires                => Optional[HashRef],
+        provides                => HashRef,
         participants            => ArrayRef,
         connection_id           => Optional[WheelID],
     ];
@@ -49,8 +41,8 @@ subtype Participant,
         application_name    => SessionAlias,
         version             => Num,
         participant_name    => SessionAlias,
-        provides            => MethodHash,
-        requires            => Optional[MethodHash],
+        provides            => HashRef,
+        requires            => Optional[HashRef],
         connection_id       => Optional[WheelID],
     ];
 
@@ -60,8 +52,8 @@ subtype RegisterApplicationPayload,
         application_name        => SessionAlias,
         version                 => Num,
         min_participant_version => Num,
-        provides                => MethodHash,
-        requires                => Optional[MethodHash],
+        provides                => HashRef,
+        requires                => HashRef,
     ];
 
 subtype RegisterParticipantPayload,
@@ -70,8 +62,8 @@ subtype RegisterParticipantPayload,
         participant_name        => SessionAlias,
         application_name        => SessionAlias,
         version                 => Num,
-        provides                => MethodHash,
-        requires                => Optional[MethodHash],
+        provides                => HashRef,
+        requires                => HashRef,
     ];
 
 subtype UnRegisterApplicationPayload,
@@ -92,10 +84,16 @@ subtype ServerConfiguration,
     ];
 
 subtype ServerConnectionInfo,
-    as ServerConfiguration
+    as Dict
     [
         connection_id       => WheelID,
         resolved_address    => Str,
+        remote_address      => Str,
+        remote_port         => Int,
+        return_session      => Optional[SessionAlias|SessionID],
+        return_event        => Str,
+        server_alias        => Str,
+        tag                 => Optional[Ref],
     ];
 
 subtype VoltronMessage,

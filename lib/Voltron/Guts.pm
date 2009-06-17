@@ -5,12 +5,14 @@ use 5.010;
 
 use MooseX::Declare;
 
-role Voltron::Guts with POEx::ProxySession::Client
+role Voltron::Guts with POEx::Role::SessionInstantiation
 {
     use Voltron::Types(':all');
     use POEx::Types(':all');
     use MooseX::Types::Moose(':all');
     use MooseX::AttributeHelpers;
+    use POEx::ProxySession::Client;
+    use YAML('Load', 'Dump');
     use Socket;
 
     use aliased 'POEx::Role::Event';
@@ -31,14 +33,15 @@ role Voltron::Guts with POEx::ProxySession::Client
     has requires =>
     (
         is      => 'ro',
-        isa     => MethodHash,
+        isa     => HashRef,
     );
     
     has provides =>
     (
         is              => 'ro',
-        isa             => MethodHash,
-        lazy_builder    => 1,
+        isa             => HashRef,
+        lazy            => 1,
+        builder         => '_build_provides',
     );
 
     has serverinfos =>
@@ -58,11 +61,48 @@ role Voltron::Guts with POEx::ProxySession::Client
         }
     );
 
-    requires('build_register_message');
+    has proxyclient =>
+    (
+        is          => 'ro',
+        isa         => 'POEx::ProxySession::Client',
+        default     => method
+        {
+            POEx::ProxySession::Client->new(alias => 'PXPSClient', options => { trace => 1, debug => 1 }); 
+        }
+    );
+
+    has register_message =>
+    (
+        is          => 'ro',
+        isa         => VoltronMessage,
+        lazy_build  => 1,
+    );
+
+    has server_configs => ( is => 'rw', isa => ArrayRef[ServerConfiguration] );
+
+    requires('_build_register_message');
+
+    after _start is Event
+    {
+        foreach my $config (@{ $self->server_configs })
+        {
+            $config->{return_session} ||= $self->poe->sender->ID;
+
+            $self->post
+            (
+                'PXPSClient',
+                'connect',
+                remote_address  => $config->{remote_address},
+                remote_port     => $config->{remote_port},
+                return_event    => 'publish_self',
+                tag             => $config
+            );
+        }
+    }
 
     method _build_provides
     {
-        my @methods;
+        my $hash = {};
         foreach my $method ($self->meta->get_all_methods)
         {
             if($method->isa('Class::MOP::Method::Wrapped'))
@@ -79,49 +119,29 @@ role Voltron::Guts with POEx::ProxySession::Client
             {
                 next;
             }
-
-            push(@methods, $method);
+            
+            $hash->{$method->name} = $method->signature;
         }
-
-        return { map { $_->name, $_->signature } @methods };
+        
+        return $hash;
     }
 
-    method run(ArrayRef[ServerConfiguration] :$server_configs) is Event
+    method publish_self(WheelID :$connection_id, Str :$remote_address, Int :$remote_port, ServerConfiguration :$tag) is Event
     {
-        foreach my $config (@$server_configs)
-        {
-            $config->{return_session} ||= $self->poe->sender->ID;
+        $tag->{resolved_address} = $remote_address;
+        $tag->{connection_id} = $connection_id;
 
-            $self->yield
-            (
-                'connect',
-                remote_address  => $config->{remote_address},
-                remote_port     => $config->{remote_port},
-                return_event    => 'publish_self',
-                tag             => $config
-            );
-        }
+        $self->set_serverinfo($connection_id, $tag);
 
-        POE::Kernel->run();
-    }
-
-    after handle_on_connect(GlobRef $socket, Str $address, Int $port, WheelID $id) is Event
-    {
-        my $tag = $self->delete_connection_tag($id);
-        $tag->{connection_id} = $self->last_wheel;
-        $tag->{resolved_address} = inet_ntoa($address);
-        $self->set_serverinfo($tag->{connection_id}, $tag);
-    }
-
-    method publish_self(WheelID :$connection_id, Str :$remote_address, Int :$remote_port) is Event
-    {
-        $self->yield
+        $self->post
         (
+            'PXPSClient',
             'publish',
             connection_id   => $connection_id,
             session         => $self,
-            session_alias   => $self->application_name,
+            session_alias   => $self->name,
             return_event    => 'check_publish_self',
+            tag             => $tag,
         );
     }
 
@@ -131,22 +151,21 @@ role Voltron::Guts with POEx::ProxySession::Client
         Bool :$success, 
         SessionAlias :$session_alias, 
         Ref :$payload?, 
-        Ref :$tag?
+        ServerConnectionInfo :$tag
     ) is Event
     {
-        my $info = $self->get_serverinfo($connection_id);
         if($success)
         {
-            $self->yield('send_register', $info);
+            $self->yield('send_register', $tag);
         }
         else
         {
             $self->post
             (
-                $info->{return_session},
-                $info->{return_event},
+                $tag->{return_session},
+                $tag->{return_event},
                 success     => 0,
-                serverinfo  => $info,
+                serverinfo  => $tag,
                 payload     => $payload
             );
         }
@@ -154,10 +173,11 @@ role Voltron::Guts with POEx::ProxySession::Client
 
     method send_register(ServerConnectionInfo $info) is Event
     {
-        $self->yield
+        $self->post
         (
+            'PXPSClient',
             'return_to_sender',
-            message         => $self->build_register_message,
+            message         => $self->register_message,
             wheel_id        => $info->{connection_id},
             return_session  => $self->ID,
             return_event    => 'handle_on_register',
@@ -185,7 +205,7 @@ role Voltron::Guts with POEx::ProxySession::Client
                 $info->{return_event},
                 success     => $data->{success},
                 serverinfo  => $info,
-                payload     => thaw($data->{payload}),
+                payload     => Load($data->{payload}),
             );
         }
     }

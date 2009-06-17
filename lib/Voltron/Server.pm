@@ -3,13 +3,14 @@ use MooseX::Declare;
 
 class Voltron::Server extends POEx::ProxySession::Server
 {
+    use MooseX::Types::Structured('Dict', 'Tuple');
     use MooseX::Types::Moose(':all');
     use MooseX::AttributeHelpers;
     use MooseX::Meta::TypeConstraint::ForceCoercion;
     use POEx::Types(':all');
     use POEx::ProxySession::Types(':all');
     use Voltron::Types(':all');
-    use Storable('thaw', 'nfreeze');
+    use YAML('Dump', 'Load');
     use aliased 'POEx::Role::Event';
     use aliased 'POEx::Role::ProxyEvent';
 
@@ -76,11 +77,9 @@ class Voltron::Server extends POEx::ProxySession::Server
 
     method register_application(VoltronMessage $data, WheelID $id) is Event
     {
-        state $validator = MooseX::Meta::TypeConstraint::ForceCoercion->new(type_constraint => RegisterApplicationPayload);
-
-        my $payload = thaw($data->{payload});
+        my $payload = Load($data->{payload});
         
-        if( defined ( my $msg = $validator->validate( $payload ) ) )
+        if( defined ( my $msg = RegisterApplicationPayload->validate( $payload ) ) )
         {
             $self->yield
             (
@@ -155,11 +154,9 @@ class Voltron::Server extends POEx::ProxySession::Server
 
     method register_participant(VoltronMessage $data, WheelID $id) is Event
     {
-        state $validator = MooseX::Meta::TypeConstraint::ForceCoercion->new(type_constraint => RegisterParticipantPayload);
-
-        my $payload = thaw($data->{payload});
+        my $payload = Load($data->{payload});
         
-        if( defined ( my $msg = $validator->validate( $payload ) ) )
+        if( defined ( my $msg = RegisterParticipantPayload->validate( $payload ) ) )
         {
             $self->yield
             (
@@ -265,7 +262,7 @@ class Voltron::Server extends POEx::ProxySession::Server
                     participant     => $participant,
                     tag         =>
                     {
-                        application     => $application,
+                        application     => $app,
                         participant     => $participant,
                         connection_id   => $id,
                         original        => $data,
@@ -277,11 +274,9 @@ class Voltron::Server extends POEx::ProxySession::Server
 
     method unregister_application(VoltronMessage $data, WheelID $id) is Event
     {
-        state $validator = MooseX::Meta::TypeConstraint::ForceCoercion->new(type_constraint => UnRegisterApplicationPayload);
-
-        my $payload = thaw($data->{payload});
+        my $payload = Load($data->{payload});
         
-        if( defined ( my $msg = $validator->validate( $payload ) ) )
+        if( defined ( my $msg = UnRegisterApplicationPayload->validate( $payload ) ) )
         {
             $self->yield
             (
@@ -327,11 +322,9 @@ class Voltron::Server extends POEx::ProxySession::Server
 
     method unregister_participant(VoltronMessage $data, WheelID $id) is Event
     {
-        state $validator = MooseX::Meta::TypeConstraint::ForceCoercion->new(type_constraint => UnRegisterParticipantPayload);
-
-        my $payload = thaw($data->{payload});
+        my $payload = Load($data->{payload});
         
-        if( defined ( my $msg = $validator->validate( $payload ) ) )
+        if( defined ( my $msg = UnRegisterParticipantPayload->validate( $payload ) ) )
         {
             $self->yield
             (
@@ -376,12 +369,22 @@ class Voltron::Server extends POEx::ProxySession::Server
         );
     }
 
-    method check_provides(SessionAlias $session_name, MethodHash $requires) is Event
+    method check_provides(SessionAlias $session_name, HashRef $requires?) is Event
     {
+        return 1 if !$requires;
         my $meta = $self->get_session($session_name)->{meta};
         
         while(my ($name, $obj) = each %{ $meta->{methods} })
         {
+            if($name eq 'flarg')
+            {
+                use Moose::Util('does_role');
+                use Data::Dumper;
+                $Data::Dumper::Maxdepth = 2;
+                warn 'FLARG DUMP: '. Dumper($obj);
+                #bless($obj, 'Moose::Meta::Class');
+                warn 'DOES NOT DO ROLE' if !does_role($obj, ProxyEvent);
+            }
             if($obj->isa('Class::MOP::Method::Wrapped'))
             {
                 my $orig = $obj->get_original_method;
@@ -392,15 +395,19 @@ class Voltron::Server extends POEx::ProxySession::Server
                 
                 $obj = $orig;
             }
-            elsif(!$obj->meta->isa('Moose::Meta::Class') || !$obj->meta->does_role(ProxyEvent))
+            elsif(!$obj->can('meta') || !$obj->meta->isa('Moose::Meta::Class') || !$obj->meta->does_role(ProxyEvent))
             {
                 next;
             }
 
+            warn "METHOD NAME: $name";
             return 0 if not exists($requires->{$name});
             return 0 if $obj->signature ne delete($requires->{$name});
+            warn "EXISTS";
         }
-
+        
+        warn "CHECKED SESSION: $session_name";
+        warn 'KEYS LEFT: '. join(' ', keys %$requires);
         return 0 if keys %$requires;
         return 1;
     }
@@ -416,7 +423,7 @@ class Voltron::Server extends POEx::ProxySession::Server
         {
             type    => 'participant_add',
             id      => -1,
-            payload => nfreeze($participant),
+            payload => Dump($participant),
         };
 
         $self->yield
@@ -451,7 +458,7 @@ class Voltron::Server extends POEx::ProxySession::Server
             original    => $tag->{original},
         );
         
-        $args{'payload'} = $payload // (thaw($data->{payload}) if defined($data->{payload}));
+        $args{'payload'} = $payload // defined($data->{payload}) ? Load($data->{payload}) : undef;
 
         $self->yield
         (
@@ -471,7 +478,7 @@ class Voltron::Server extends POEx::ProxySession::Server
         {
             type    => 'participant_remove',
             id      => -1,
-            payload => nfreeze($participant),
+            payload => Dump($participant),
         };
 
         $self->yield
@@ -503,7 +510,7 @@ class Voltron::Server extends POEx::ProxySession::Server
             original    => $tag->{original},
         );
 
-        $args{'payload'} = thaw($data->{payload}) if defined($data->{payload});
+        $args{'payload'} = Load($data->{payload}) if defined($data->{payload});
 
         $self->yield
         (

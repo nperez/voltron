@@ -5,13 +5,13 @@ use 5.010;
 
 use MooseX::Declare;
 
-role Voltron::Participant with POEx::ProxySession::Client
+role Voltron::Participant with Voltron::Guts
 {
     use Voltron::Types(':all');
     use POEx::Types(':all');
     use MooseX::Types::Moose(':all');
     use MooseX::AttributeHelpers;
-    use Socket;
+    use YAML('Dump', 'Load');
 
     use aliased 'POEx::Role::Event';
     use aliased 'Voltron::Role::VoltronEvent';
@@ -25,7 +25,7 @@ role Voltron::Participant with POEx::ProxySession::Client
     has applications =>
     (
         metaclass   => 'MooseX::AttributeHelpers::Collection::Hash',
-        isa         => HashRef[Participant],
+        isa         => HashRef[Application],
         default     => sub { {} },
         lazy        => 1,
         provides    => 
@@ -40,8 +40,32 @@ role Voltron::Participant with POEx::ProxySession::Client
     );
 
     requires('application_added', 'application_removed');
+    
+    method _build_register_message
+    {
+        return
+        {
+            type    => 'register_participant',
+            id      => -1,
+            payload => Dump
+            (
+                {
+                    application_name        => $self->application_name,
+                    participant_name        => $self->name,
+                    version                 => $self->version,
+                    provides                => $self->provides,
+                    requires                => $self->requires,
+                }
+            ),
+        };
+    }
 
-    around handle_inbound_data(VoltronMessage $data, WheelID $id) is Event
+    after _start is Event
+    {
+        $self->proxyclient->unknown_message_event([$self->ID, 'handle_voltron_data']);
+    }
+
+    method handle_voltron_data(VoltronMessage $data, WheelID $id) is Event
     {
         given($data->{type})
         {
@@ -51,37 +75,33 @@ role Voltron::Participant with POEx::ProxySession::Client
             }
             default
             {
-                $orig->($self, $data, $id);
+                warn qq|Received unknown message type from the server ${\$data->{type}}|;
+                $self->post
+                (
+                    'PXPSClient',
+                    'send_result',
+                    success         => 0,
+                    wheel_id        => $id,
+                    original        => $data,
+                    payload         => Dump(\'Unknown message type')
+                );
             }
         }
-    }
-
-    method build_register_message()
-    {
-        state $msg = 
-        {
-            application_name        => $self->application_name,
-            participant_name        => $self->name,
-            version                 => $self->version,
-            provides                => $self->provides,
-            requires                => $self->requires,
-        };
-
-        return $msg;
     }
 
     around handle_on_register(VoltronMessage $data, WheelID $id, ServerConnectionInfo $info) is Event
     {
         if($data->{success})
         {
-            my $app = thaw($data->{payload})->{application};
+            my $app = Load($data->{payload})->{application};
             $app->{connection_id} = $id;
             $self->set_application($id, $app);
 
             $self->yield('application_added', application => $app);
 
-            $self->yield
+            $self->post
             (
+                'PXPSClient',
                 'subscribe',
                 connection_id   => $id,
                 to_session      => $self->application_name,
@@ -130,8 +150,9 @@ role Voltron::Participant with POEx::ProxySession::Client
     method handle_application_termination(VoltronMessage $data, WheelID $id) is Event
     {
         my $app = $self->delete_application($id);
-        $self->yield
+        $self->post
         (
+            'PXPSClient',
             'unsubscribe',
             session_name    => $app->{application_name},
             return_event    => 'handle_application_unsubscription',
@@ -147,12 +168,84 @@ role Voltron::Participant with POEx::ProxySession::Client
     {
         if($success)
         {
-            $self->delete_wheel($tag->{connection_id});
+            $self->proxyclient->delete_wheel($tag->{connection_id});
             $self->yield('application_removed', application => $tag->{application});
+
+            if(exists($tag->{return_session}))
+            {
+                $self->post
+                (
+                    $tag->{return_session},
+                    $tag->{return_event},
+                    success     => $success,
+                );
+            }
         }
         else
         {
             die "Something went wrong unsubscribing from the proxied application session";
+        }
+    }
+
+    method unregister_from
+    (
+        Application :$application, 
+        SessionID|SessionAlias|Session|DoesSessionInstantiation :$return_session?,
+        Str :$return_event
+    ) is Event
+    {
+        state $msg = 
+        {
+            type    => 'unregister_participant',
+            id      => -1, 
+            payload => Dump({ participant_name => $self->name })
+        };
+
+        $self->post
+        (
+            'PXPSClient',
+            'return_to_sender',
+            message         => $msg,
+            wheel_id        => $application->{connection_id},
+            return_session  => $self->ID,
+            return_event    => 'handle_unregister_from',
+            tag             =>
+            {
+                application     => $application,
+                return_session  => $return_session // $self->poe->sender->ID,
+                return_event    => $return_event,
+            }
+        );
+    }
+
+    method handle_unregister_from(VoltronMessage $data, WheelID $id, HashRef $tag) is Event
+    {
+        if($data->{success})
+        {
+            $self->post
+            (
+                'PXPSClient',
+                'unsubscribe',
+                session_name    => $tag->{application}->{application_name},
+                return_event    => 'handle_application_unsubscription',
+                tag             =>
+                {
+                    connection_id   => $id,
+                    application     => $tag->{application},
+                    return_session  => $tag->{return_session},
+                    return_event    => $tag->{return_event},
+                }
+            );
+        }
+        else
+        {
+            $self->post
+            (
+                $tag->{return_session},
+                $tag->{return_event},
+                success     => $data->{success},
+                payload     => Load($data->{payload}),
+            );
         }
     }
 }

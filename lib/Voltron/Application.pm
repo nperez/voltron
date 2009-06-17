@@ -11,7 +11,7 @@ role Voltron::Application with Voltron::Guts
     use POEx::Types(':all');
     use MooseX::Types::Moose(':all');
     use MooseX::AttributeHelpers;
-    use Socket;
+    use YAML('Dump', 'Load');
 
     use aliased 'POEx::Role::Event';
     use aliased 'Voltron::Role::VoltronEvent';
@@ -41,21 +41,32 @@ role Voltron::Application with Voltron::Guts
 
     requires('participant_added', 'participant_removed');
 
-    method build_register_message()
+    method _build_register_message
     {
-        state $msg =
+        return
         {
-            application_name        => $self->name,
-            min_participant_version => $self->min_participant_version,
-            version                 => $self->version,
-            provides                => $self->provides,
-            requires                => $self->requires,
+            type    => 'register_application',
+            id      => -1,
+            payload => Dump
+            (
+                {
+                    application_name        => $self->name,
+                    min_participant_version => $self->min_participant_version,
+                    version                 => $self->version,
+                    provides                => $self->provides,
+                    requires                => $self->requires,
+                }
+            ),
         };
-
-        return $msg;
+    }
+    
+    after _start is Event
+    {
+        $self->proxyclient->unknown_message_event([$self->ID, 'handle_voltron_data']);
+        $self->provides;
     }
 
-    around handle_inbound_data(VoltronMessage $data, WheelID $id) is Event
+    method handle_voltron_data(VoltronMessage $data, WheelID $id) is Event
     {
         given($data->{type})
         {
@@ -69,7 +80,16 @@ role Voltron::Application with Voltron::Guts
             }
             default
             {
-                $orig->($self, $data, $id);
+                warn qq|Received unknown message type from the server ${\$data->{type}}|;
+                $self->post
+                (
+                    'PXPSClient',
+                    'send_result',
+                    success         => 0,
+                    wheel_id        => $id,
+                    original        => $data,
+                    payload         => Dump(\'Unknown message type')
+                );
             }
         }
     }
@@ -85,7 +105,7 @@ role Voltron::Application with Voltron::Guts
         {
             type    => 'unregister_application',
             id      => -1,
-            payload => nfreeze({ application_name => $self->application_name })
+            payload => Dump({ application_name => $self->application_name })
         };
 
         $self->yield
@@ -131,14 +151,14 @@ role Voltron::Application with Voltron::Guts
                 $tag->{return_session},
                 $tag->{return_event},
                 success     => $data->{success},
-                payload     => thaw($data->{payload}),
+                payload     => Load($data->{payload}),
             );
         }
     }
 
     method handle_add_participant(VoltronMessage $data, WheelID $id) is Event
     {
-        my $participant = thaw($data->{payload});
+        my $participant = Load($data->{payload});
         $self->yield
         (
             'subscribe',
@@ -177,13 +197,13 @@ role Voltron::Application with Voltron::Guts
             success     => $success,
             wheel_id    => $connection_id,
             original    => $tag->{original},
-            payload     => nfreeze($payload),
+            payload     => Dump($payload),
         );
     }
 
     method handle_remove_participant(VoltronMessage $data, WheelID $id) is Event
     {
-        my $participant = thaw($data->{payload});
+        my $participant = Load($data->{payload});
         $self->yield
         (
             'unsubscribe',
