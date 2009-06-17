@@ -12,7 +12,7 @@ role Voltron::Guts with POEx::Role::SessionInstantiation
     use MooseX::Types::Moose(':all');
     use MooseX::AttributeHelpers;
     use POEx::ProxySession::Client;
-    use YAML('Load', 'Dump');
+    use Storable('nfreeze', 'thaw');
     use Socket;
 
     use aliased 'POEx::Role::Event';
@@ -205,7 +205,7 @@ role Voltron::Guts with POEx::Role::SessionInstantiation
                 $info->{return_event},
                 success     => $data->{success},
                 serverinfo  => $info,
-                payload     => Load($data->{payload}),
+                payload     => thaw($data->{payload}),
             );
         }
     }

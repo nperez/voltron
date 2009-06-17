@@ -11,7 +11,7 @@ role Voltron::Participant with Voltron::Guts
     use POEx::Types(':all');
     use MooseX::Types::Moose(':all');
     use MooseX::AttributeHelpers;
-    use YAML('Dump', 'Load');
+    use Storable('nfreeze', 'thaw');
 
     use aliased 'POEx::Role::Event';
     use aliased 'Voltron::Role::VoltronEvent';
@@ -47,7 +47,7 @@ role Voltron::Participant with Voltron::Guts
         {
             type    => 'register_participant',
             id      => -1,
-            payload => Dump
+            payload => nfreeze
             (
                 {
                     application_name        => $self->application_name,
@@ -83,7 +83,7 @@ role Voltron::Participant with Voltron::Guts
                     success         => 0,
                     wheel_id        => $id,
                     original        => $data,
-                    payload         => Dump(\'Unknown message type')
+                    payload         => \'Unknown message type'
                 );
             }
         }
@@ -93,7 +93,7 @@ role Voltron::Participant with Voltron::Guts
     {
         if($data->{success})
         {
-            my $app = Load($data->{payload})->{application};
+            my $app = thaw($data->{payload})->{application};
             $app->{connection_id} = $id;
             $self->set_application($id, $app);
 
@@ -149,6 +149,8 @@ role Voltron::Participant with Voltron::Guts
 
     method handle_application_termination(VoltronMessage $data, WheelID $id) is Event
     {
+        return if not $self->has_application($id);
+
         my $app = $self->delete_application($id);
         $self->post
         (
@@ -168,7 +170,7 @@ role Voltron::Participant with Voltron::Guts
     {
         if($success)
         {
-            $self->proxyclient->delete_wheel($tag->{connection_id});
+            $self->delete_application($tag->{application}->{connection_id});
             $self->yield('application_removed', application => $tag->{application});
 
             if(exists($tag->{return_session}))
@@ -180,6 +182,9 @@ role Voltron::Participant with Voltron::Guts
                     success     => $success,
                 );
             }
+
+            $self->post('PXPSClient', 'shutdown');
+            $self->clear_alias;
         }
         else
         {
@@ -198,7 +203,7 @@ role Voltron::Participant with Voltron::Guts
         {
             type    => 'unregister_participant',
             id      => -1, 
-            payload => Dump({ participant_name => $self->name })
+            payload => nfreeze({ participant_name => $self->name })
         };
 
         $self->post
@@ -244,7 +249,7 @@ role Voltron::Participant with Voltron::Guts
                 $tag->{return_session},
                 $tag->{return_event},
                 success     => $data->{success},
-                payload     => Load($data->{payload}),
+                payload     => thaw($data->{payload}),
             );
         }
     }

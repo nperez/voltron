@@ -11,7 +11,7 @@ role Voltron::Application with Voltron::Guts
     use POEx::Types(':all');
     use MooseX::Types::Moose(':all');
     use MooseX::AttributeHelpers;
-    use YAML('Dump', 'Load');
+    use Storable('nfreeze', 'thaw');
 
     use aliased 'POEx::Role::Event';
     use aliased 'Voltron::Role::VoltronEvent';
@@ -47,7 +47,7 @@ role Voltron::Application with Voltron::Guts
         {
             type    => 'register_application',
             id      => -1,
-            payload => Dump
+            payload => nfreeze
             (
                 {
                     application_name        => $self->name,
@@ -76,7 +76,7 @@ role Voltron::Application with Voltron::Guts
             }
             when('participant_remove')
             {
-                $self->yield('handle_remote_participant', $data, $id);
+                $self->yield('handle_remove_participant', $data, $id);
             }
             default
             {
@@ -88,7 +88,7 @@ role Voltron::Application with Voltron::Guts
                     success         => 0,
                     wheel_id        => $id,
                     original        => $data,
-                    payload         => Dump(\'Unknown message type')
+                    payload         => \'Unknown message type'
                 );
             }
         }
@@ -105,11 +105,12 @@ role Voltron::Application with Voltron::Guts
         {
             type    => 'unregister_application',
             id      => -1,
-            payload => Dump({ application_name => $self->application_name })
+            payload => nfreeze({ application_name => $self->name })
         };
 
-        $self->yield
+        $self->post
         (
+            'PXPSClient',
             'return_to_sender',
             message         => $message,
             wheel_id        => $info->{connection_id},
@@ -127,15 +128,17 @@ role Voltron::Application with Voltron::Guts
     {
         if($data->{success})
         {
-            my $participants = $self->all_participants;
-            foreach my $participant (@$participants)
+            foreach my $participant ($self->all_participants)
             {
                 if($participant->{connection_id} == $id)
                 {
                     $self->post($participant->{participant_name}, 'shutdown');
-                    $self->delete_participant($participant->{name});
+                    $self->delete_participant($participant->{participant_name});
                 }
             }
+
+            $self->post('PXPSClient', 'shutdown');
+            $self->clear_alias;
             
             $self->post
             (
@@ -151,16 +154,17 @@ role Voltron::Application with Voltron::Guts
                 $tag->{return_session},
                 $tag->{return_event},
                 success     => $data->{success},
-                payload     => Load($data->{payload}),
+                payload     => thaw($data->{payload}),
             );
         }
     }
 
     method handle_add_participant(VoltronMessage $data, WheelID $id) is Event
     {
-        my $participant = Load($data->{payload});
-        $self->yield
+        my $participant = thaw($data->{payload});
+        $self->post
         (
+            'PXPSClient',
             'subscribe',
             connection_id   => $id,
             to_session      => $participant->{participant_name},
@@ -187,25 +191,27 @@ role Voltron::Application with Voltron::Guts
         {
             my $participant = $tag->{participant};
             $participant->{connection_id} = $connection_id;
-            $self->add_participant($participant);
+            $self->set_participant($participant->{participant_name}, $participant);
             $self->yield('participant_added', participant => $participant);
         }
         
-        $self->yield
+        $self->post
         (
+            'PXPSClient',
             'send_result',
             success     => $success,
             wheel_id    => $connection_id,
             original    => $tag->{original},
-            payload     => Dump($payload),
+            payload     => $payload,
         );
     }
 
     method handle_remove_participant(VoltronMessage $data, WheelID $id) is Event
     {
-        my $participant = Load($data->{payload});
-        $self->yield
+        my $participant = thaw($data->{payload});
+        $self->post
         (
+            'PXPSClient',
             'unsubscribe',
             session_name    => $participant->{participant_name},
             return_event    => 'handle_participant_unsubscription',
@@ -222,19 +228,20 @@ role Voltron::Application with Voltron::Guts
     method handle_participant_unsubscription
     (
         Bool :$success, 
-        SessionAlias :$session_name, 
+        SessionAlias :$session_alias, 
         HashRef :$tag
     ) is Event
     {
         if($success)
         {
             my $participant = $tag->{participant};
-            $self->delete_participant($participant->{name});
+            $self->delete_participant($participant->{participant_name});
             $self->yield('participant_removed', participant => $participant);
         }
         
-        $self->yield
+        $self->post
         (
+            'PXPSClient',
             'send_result',
             success     => $success,
             wheel_id    => $tag->{connection_id},

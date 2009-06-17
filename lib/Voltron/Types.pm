@@ -12,8 +12,6 @@ use MooseX::Types -declare =>
         VoltronMessage 
         ServerConfiguration
         ServerConnectionInfo
-        RegisterApplicationPayload
-        RegisterParticipantPayload
         UnRegisterApplicationPayload
         UnRegisterParticipantPayload
     / 
@@ -31,7 +29,7 @@ subtype Application,
         min_participant_version => Num,
         requires                => Optional[HashRef],
         provides                => HashRef,
-        participants            => ArrayRef,
+        participants            => Optional[HashRef],
         connection_id           => Optional[WheelID],
     ];
 
@@ -44,26 +42,6 @@ subtype Participant,
         provides            => HashRef,
         requires            => Optional[HashRef],
         connection_id       => Optional[WheelID],
-    ];
-
-subtype RegisterApplicationPayload,
-    as Dict
-    [
-        application_name        => SessionAlias,
-        version                 => Num,
-        min_participant_version => Num,
-        provides                => HashRef,
-        requires                => HashRef,
-    ];
-
-subtype RegisterParticipantPayload,
-    as Dict
-    [
-        participant_name        => SessionAlias,
-        application_name        => SessionAlias,
-        version                 => Num,
-        provides                => HashRef,
-        requires                => HashRef,
     ];
 
 subtype UnRegisterApplicationPayload,
