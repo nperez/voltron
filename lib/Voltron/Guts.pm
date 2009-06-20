@@ -67,7 +67,7 @@ role Voltron::Guts with POEx::Role::SessionInstantiation
         isa         => 'POEx::ProxySession::Client',
         default     => method
         {
-            POEx::ProxySession::Client->new(alias => 'PXPSClient', options => { trace => 1, debug => 1 }); 
+            POEx::ProxySession::Client->new(alias => 'PXPSClient', options => { trace => $self->options->{trace}, debug => $self->options->{debug} }); 
         }
     );
 

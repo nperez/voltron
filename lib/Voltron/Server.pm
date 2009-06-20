@@ -227,7 +227,7 @@ class Voltron::Server extends POEx::ProxySession::Server
                     success     => 0,
                     original    => $data, 
                     wheel_id    => $id, 
-                    payload     => \"Participant provides do not matach what the application requires"
+                    payload     => \"Participant provides do not match what the application requires"
                 );
             }
             elsif(!$self->check_provides($application_name, $payload->{requires}))
@@ -360,6 +360,7 @@ class Voltron::Server extends POEx::ProxySession::Server
     method check_provides(SessionAlias $session_name, HashRef $requires?) is Event
     {
         return 1 if !$requires;
+        my %reqs = %$requires;
         my $methods = $self->get_session($session_name)->{methods};
         
         while(my ($name, $args) = each %$methods)
@@ -367,11 +368,11 @@ class Voltron::Server extends POEx::ProxySession::Server
             next if not exists($args->{traits})
                 or not defined($args->{traits})
                 or not exists($args->{traits}->{+VoltronEvent});
-            return 0 if not exists($requires->{$name});
-            return 0 if $args->{signature} ne delete($requires->{$name});
+            return 0 if not exists($reqs{$name});
+            return 0 if $args->{signature} ne delete($reqs{$name});
         }
         
-        return 0 if keys %$requires;
+        return 0 if keys %reqs;
         return 1;
     }
 
